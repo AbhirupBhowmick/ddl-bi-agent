@@ -51,7 +51,7 @@ The system implements a **Deterministic Tool Calling & Grounded Intelligence** p
 - **Language & Runtime**: Python 3.11+
 - **Backend Framework**: FastAPI with Pydantic v2 schemas and strict error handling envelopes (`400`, `422`, `500`).
 - **Database & ORM**: SQLite (`bi_analytics.db`) with SQLAlchemy 2.0 ORM, indexed on relational foreign keys and timestamps.
-- **LLM Function Calling Layer**: Google Gemini (`google-genai` / `gemini-3.5-flash`) & OpenAI (`gpt-4o-mini`) with deterministic offline fallback.
+- **LLM Function Calling Layer**: Google Gemini (`google-genai` / `gemini-2.5-flash` with `gemini-1.5-flash` fallback) & OpenAI (`gpt-4o-mini`). Includes resilient error-recovery for quota limits (`ResourceExhausted` / HTTP 429) that immediately fails over to deterministic local execution so responses never hang or buffer.
 - **Frontend / Dashboard**: Streamlit with interactive Plotly graphs, executive KPI metrics, and AI chat feed with inline chart rendering.
 - **Testing**: pytest suite covering data processing, business calculations, diagnostic drivers, API endpoints, and prompt grounding.
 
@@ -119,7 +119,7 @@ cp .env.example .env
 Ensure your `.env` contains:
 ```ini
 GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-3.5-flash
+GEMINI_MODEL=gemini-2.5-flash
 # Optional:
 # OPENAI_API_KEY=your_openai_key_here
 ```
@@ -203,6 +203,9 @@ KEY ARCHITECTURAL HIGHLIGHTS:
    deterministic offline rule-based execution, guaranteeing 100% test reliability.
 3. Diagnostic Precision: Mathematical decomposition of revenue variance isolating
    the exact impact of order volume collapse vs. basket-size contraction.
+4. Quota Stability & Zero-Hang Fallback: Configured with stable `gemini-2.5-flash`
+   (and `gemini-1.5-flash` fallback); intercepts `ResourceExhausted` and HTTP 429
+   quota spikes to instantly fail over to local execution without buffering.
 ================================================================================
 ```
 

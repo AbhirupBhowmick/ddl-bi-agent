@@ -193,10 +193,10 @@ def generate_raw_synthetic_data():
         elif m == 4:
             customer_pool = cohort_active
         elif m == 5:
-            customer_pool = cohort_active[:50] * 3 + cohort_active[50:] + cohort_new
+            customer_pool = cohort_active[:50] * 3 + cohort_active[50:]
         elif m == 6:
-            # Churn and repeat slump in month 6: only limited active and few new
-            customer_pool = cohort_active[:30] + cohort_new[:5]
+            # Churn and repeat slump in month 6: only limited active and newly acquired cohort
+            customer_pool = cohort_active[:30] + cohort_new * 2
         else:
             customer_pool = valid_customer_ids
 

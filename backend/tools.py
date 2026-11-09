@@ -266,6 +266,33 @@ def get_customer_metrics(session: Optional[Session] = None) -> Dict[str, Any]:
             .scalar() or 0
         )
 
+        inactive_sample_rows = (
+            db.query(
+                Customer.customer_id,
+                Customer.name,
+                Customer.email,
+                Customer.segment,
+                first_orders.c.last_order_date
+            )
+            .join(first_orders, Customer.customer_id == first_orders.c.customer_id)
+            .filter(first_orders.c.last_order_date < sixty_days_ago)
+            .order_by(first_orders.c.last_order_date.asc())
+            .limit(5)
+            .all()
+        )
+
+        sample_inactive = [
+            {
+                "customer_id": r.customer_id,
+                "name": r.name,
+                "email": r.email,
+                "segment": r.segment,
+                "last_order_date": r.last_order_date.strftime("%Y-%m-%d") if r.last_order_date else None,
+                "days_inactive": (anchor_date - r.last_order_date).days if r.last_order_date else None
+            }
+            for r in inactive_sample_rows
+        ]
+
         # 4. Top 5 LTV customers
         top_ltv_rows = (
             db.query(
@@ -302,6 +329,7 @@ def get_customer_metrics(session: Optional[Session] = None) -> Dict[str, Any]:
             "new_customers": new_customers_count,
             "repeat_customers": repeat_customers_count,
             "inactive_churned_customers": inactive_customers_count,
+            "sample_inactive_customers": sample_inactive,
             "top_5_ltv_customers": top_5_ltv
         }
     finally:

@@ -5,6 +5,19 @@ import logging
 from typing import Optional, Dict, Any, Tuple
 from dotenv import load_dotenv
 
+try:
+    from google.api_core.exceptions import ResourceExhausted, GoogleAPICallError
+except ImportError:
+    class ResourceExhausted(Exception): pass
+    class GoogleAPICallError(Exception): pass
+
+try:
+    from google.genai.errors import ClientError, ServerError, APIError
+except ImportError:
+    class ClientError(Exception): pass
+    class ServerError(Exception): pass
+    class APIError(Exception): pass
+
 from backend.tools import (
     AVAILABLE_TOOLS,
     TOOL_DEFINITIONS,
@@ -46,8 +59,10 @@ class BIAgent:
     def __init__(self):
         self.gemini_api_key = os.getenv("GEMINI_API_KEY")
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
-        self.preferred_gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+        self.preferred_gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        self.gemini_fallback_models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]
         self.preferred_openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.tools_schema = TOOL_DEFINITIONS
 
         self.gemini_client = None
         if self.gemini_api_key:
@@ -171,16 +186,48 @@ class BIAgent:
                 f"- NEVER compute, invent, or estimate new metrics outside this data.\n"
                 f"- Provide: (1) Executive Summary, (2) Key Supporting Metrics (bulleted with exact figures), (3) Strategic Business Observations."
             )
-            for m in [self.preferred_gemini_model, "gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.1-flash-lite"]:
+            models_to_try = [self.preferred_gemini_model]
+            for fb in self.gemini_fallback_models:
+                if fb not in models_to_try:
+                    models_to_try.append(fb)
+
+            for m in models_to_try:
                 try:
+                    config = None
+                    try:
+                        from google.genai import types
+                        config = types.GenerateContentConfig(
+                            temperature=0.1,
+                            max_output_tokens=1000
+                        )
+                    except Exception:
+                        pass
+
                     resp = self.gemini_client.models.generate_content(
                         model=m,
-                        contents=prompt
+                        contents=prompt,
+                        config=config
                     )
                     if resp and resp.text:
                         return resp.text.strip()
-                except Exception as e:
-                    logger.warning(f"Gemini generation failed on model {m}: {e}")
+                except (ResourceExhausted, ClientError, ServerError, APIError, GoogleAPICallError, Exception) as e:
+                    err_msg = str(e).lower()
+                    is_quota = (
+                        isinstance(e, ResourceExhausted)
+                        or (getattr(e, "code", None) == 429)
+                        or "resource_exhausted" in err_msg
+                        or "429" in err_msg
+                        or "quota" in err_msg
+                        or "demand" in err_msg
+                    )
+                    if is_quota:
+                        logger.warning(
+                            f"LLM quota or high demand bottleneck encountered on model '{m}': {e}. "
+                            "Failing over directly to deterministic local analytics execution to prevent buffering."
+                        )
+                        return None
+                    else:
+                        logger.warning(f"Gemini API call returned non-quota error on {m}: {e}. Trying fallback.")
 
         # Check OpenAI if configured
         if self.openai_client:
@@ -297,6 +344,15 @@ class BIAgent:
                 f"- **{c['name']}** ({c['segment']}): ${c['total_spend']:,.2f} total spend ({c['order_count']} orders)"
                 for c in top_ltv
             ])
+            inactive_sample = data.get("sample_inactive_customers", [])
+            inactive_section = ""
+            if inactive_sample:
+                inactive_bullets = "\n".join([
+                    f"- **{c['name']}** ({c['email']} - {c['segment']}): Last order on {c.get('last_order_date', 'N/A')} ({c.get('days_inactive', 'N/A')} days inactive)"
+                    for c in inactive_sample
+                ])
+                inactive_section = f"\n\n**Sample Inactive / Lapsed Accounts (>60 Days Without Purchase)**:\n{inactive_bullets}"
+
             return (
                 f"### Executive Summary\n"
                 f"The platform maintains **{data.get('total_customers', 0)}** registered accounts, with **{data.get('repeat_customers', 0)}** "
@@ -307,7 +363,8 @@ class BIAgent:
                 f"- **Repeat Customers (>1 Order)**: {data.get('repeat_customers', 0)}\n"
                 f"- **Inactive / Churned (>60 Days Inactive)**: {data.get('inactive_churned_customers', 0)}\n\n"
                 f"**Top Lifetime Value (LTV) Customers**:\n"
-                f"{ltv_bullets}\n\n"
+                f"{ltv_bullets}"
+                f"{inactive_section}\n\n"
                 f"### Strategic Business Observations\n"
                 f"- Retention efforts should target the {data.get('inactive_churned_customers', 0)} lapsed accounts with tailored win-back incentives.\n"
                 f"- Protect enterprise VIPs who drive outsized portions of lifetime revenue.\n"
